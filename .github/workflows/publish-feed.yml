@@ -1,1 +1,47 @@
+name: Publish papers feed
+
+# 1日1回、本体トリアージGAS(読み取り専用)から最新120件を取得し、
+# papers.json としてこのリポジトリに保存する。
+# ユーザーはこのワークフローには関与しない（保存されたJSONをPages経由で読むだけ）。
+
+on:
+  schedule:
+    - cron: '0 21 * * *'   # 毎日 06:00 JST（UTC 21:00）。本体のfetchDailyの後に回す想定
+  workflow_dispatch:        # 手動実行も可（初回テスト用）
+
+permissions:
+  contents: write           # GITHUB_TOKEN にコミット権限を付与（PAT・外部トークン不要）
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch feed from GAS
+        env:
+          GAS_DATA_URL: ${{ secrets.GAS_DATA_URL }}   # 公開データGASの /exec URL（リポジトリsecretに登録）
+        run: |
+          if [ -z "$GAS_DATA_URL" ]; then
+            echo "GAS_DATA_URL secret is not set"; exit 1
+          fi
+          # -L: GASは googleusercontent への302を挟むのでリダイレクト追従
+          curl -fsSL "$GAS_DATA_URL" -o papers.json
+          # 簡易検証: JSONとしてパースでき、papers配列があること
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open('papers.json', encoding='utf-8'))
+          assert isinstance(d.get('papers'), list), "papers array missing"
+          print("ok. papers:", len(d['papers']), "generatedAt:", d.get('generatedAt'))
+          PY
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add papers.json
+          # 中身が変わっていなければコミットしない
+          git diff --staged --quiet || git commit -m "Update papers feed ($(date -u +%FT%TZ))"
+          git push
 

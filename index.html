@@ -366,7 +366,8 @@
 
   function loadDicts(){
     // ejdict と glossary を並行ロード（どちらが失敗しても全体は止めない）
-    return Promise.all([ loadEjdict(), refreshGlossary() ]);
+    // return Promise.all([ loadEjdict(), refreshGlossary() ]);
+    return loadEjdict();
   }
 
   function rebuildPhraseList(){

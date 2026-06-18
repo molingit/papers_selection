@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper Triage</title>
+<style>
+  /* ---- 一覧性・可読性に全振り。装飾は最小限 ---- */
+  :root{
+    --ink:#1a1a1a; --sub:#6b6b6b; --line:#e2e2e2;
+    --bg:#f5f4ee;                            /* 淡いクリーム背景（カードの白と差を出す） */
+    --grey:#e7e6e1; --grey-ink:#9a9a9a;      /* del 候補（背景に合わせ少し濃いめ） */
+    --keep:#fff3b0; --keep-line:#e6cf57;     /* keep 候補（黄色） */
+    --accent:#2b6f6a;                        /* 控えめなアクセント（teal） */
+    --card-radius:6px;
+    /* 枠ごとの識別色 */
+    --eval:#3b6fb5;    /* 評価＝青（信頼・定番） */
+    --random:#8a5cb5;  /* 無作為＝紫（予測不能） */
+    --cross:#2b8a78;   /* 横断＝teal（横に渡る） */
+    --contra:#c2632e;  /* 逆張り＝橙赤（へそ曲がり） */
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue","Hiragino Kaku Gothic ProN",
+                "Yu Gothic",Meiryo,sans-serif;
+    color:var(--ink); background:var(--bg);
+    font-size:15px; line-height:1.5;
+  }
+
+  /* ---- 上1行ツールバー（読むことに集中させるため最小） ---- */
+  .bar{
+    position:sticky; top:0; z-index:10;
+    display:flex; align-items:center; gap:10px;
+    padding:8px 14px; background:rgba(245,244,238,.95);
+    border-bottom:1px solid var(--line); backdrop-filter:saturate(1.2) blur(4px);
+  }
+  .bar .grow{flex:1;}
+  .bar button{
+    font:inherit; font-size:13px; padding:5px 12px; cursor:pointer;
+    border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--ink);
+  }
+  .bar button:hover{border-color:var(--accent); color:var(--accent);}
+  .bar button.primary{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .bar button.primary:hover{filter:brightness(1.08); color:#fff;}
+  .count{font-size:13px; color:var(--sub);}
+  .count b{color:var(--ink);}
+
+  /* ---- グリッド：最大3列。狭ければ2列→1列に自動で減る ---- */
+  .grid{
+    display:grid; gap:12px; padding:14px;
+    grid-template-columns:repeat(3,1fr);
+    max-width:1500px; margin:0 auto;
+  }
+  @media (max-width:1100px){ .grid{grid-template-columns:repeat(2,1fr);} }
+  @media (max-width:720px){  .grid{grid-template-columns:1fr;} }
+  .card{
+    position:relative; border-radius:var(--card-radius);
+    padding:10px 12px 8px; background:#fff; overflow:hidden;
+    border:4px solid var(--line);   /* 4辺すべて枠色（デフォルト、slotクラスで上書き） */
+  }
+  /* 枠ごとの4辺の色 */
+  .card.slot-eval{border-color:var(--eval);}
+  .card.slot-random{border-color:var(--random);}
+  .card.slot-cross{border-color:var(--cross);}
+  .card.slot-contra{border-color:var(--contra);}
+  /* 状態は背景色で表す（枠色は維持） */
+  .card.del{background:var(--grey);}
+  .card.del .title,.card.del .abst{color:var(--grey-ink);}
+  .card.keep{background:var(--keep);}
+
+  /* タイトル(1行目) / 枠(2行目) / abst(3行目以降) */
+  .title{font-weight:650; line-height:1.35; padding-right:100px; word-break:break-word;}
+  .meta{font-size:12px; color:var(--sub); margin:3px 0 6px; padding-right:100px;}
+  .slot{display:inline-block; padding:1px 8px; border-radius:999px;
+        font-weight:600; letter-spacing:.02em; font-size:11.5px; color:#fff;}
+  .slot.slot-eval{background:var(--eval);}
+  .slot.slot-random{background:var(--random);}
+  .slot.slot-cross{background:var(--cross);}
+  .slot.slot-contra{background:var(--contra);}
+  .abst{font-size:13.5px; color:#333; white-space:pre-wrap; word-break:break-word;}
+  .abst.clamp{display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;}
+  .abst .empty{color:var(--grey-ink); font-style:italic;}
+  .link{display:inline-block; margin-top:8px; font-size:12.5px; color:var(--accent);
+        word-break:break-all;}
+
+  .toggle{margin-top:6px; font-size:12px; color:var(--accent); cursor:pointer; user-select:none;
+          background:none; border:none; padding:0;}
+  .toggle:hover{text-decoration:underline;}
+
+  /* カード右上の操作: 2×2（上 keep/del、下 words/再生） */
+  .actions{position:absolute; top:8px; right:8px;
+           display:grid; grid-template-columns:auto auto; gap:5px;}
+  .actions button{
+    font:inherit; font-size:11.5px; line-height:1; padding:4px 8px; cursor:pointer;
+    border-radius:5px; border:1px solid var(--line); background:#fff; color:var(--sub);
+    white-space:nowrap;
+  }
+  .actions .keepbtn:hover,.card.keep .keepbtn{border-color:var(--keep-line); background:var(--keep); color:#7a6200;}
+  .actions .delbtn:hover,.card.del .delbtn{border-color:#cfcfcf; background:#e6e6e6; color:#555;}
+  .actions .wordsbtn:hover{border-color:var(--accent); color:var(--accent);}
+  .actions .playbtn:hover{border-color:var(--accent); color:var(--accent);}
+  .actions .playbtn.playing{background:var(--accent); color:#fff; border-color:var(--accent);}
+
+  .empty-state{padding:48px 16px; text-align:center; color:var(--sub);}
+  .status-msg{font-size:13px; color:var(--sub); padding:0 14px 14px;}
+
+  /* ---- settings モーダル ---- */
+  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:50;
+           display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; overflow:auto;}
+  .panel{background:#fff; border-radius:10px; width:min(560px,100%); box-shadow:0 12px 40px rgba(0,0,0,.2);}
+  .panel-head{display:flex; align-items:center; justify-content:space-between;
+              padding:14px 18px; border-bottom:1px solid var(--line);}
+  .panel-head .x{border:none; background:none; font-size:22px; line-height:1; cursor:pointer; color:var(--sub);}
+  .panel-body{padding:16px 18px;}
+  .panel-body .hint{font-size:12.5px; color:var(--sub); margin:0 0 14px;}
+  .set-group{border:1px solid var(--line); border-radius:8px; padding:12px 14px; margin-bottom:14px;}
+  .set-group-title{font-size:12.5px; font-weight:700; color:var(--accent); margin-bottom:8px;}
+  .set-group label{display:inline-flex; align-items:center; gap:6px; font-size:13px; margin:0 14px 8px 0;}
+  .set-group input[type=number]{width:64px; font:inherit; padding:4px 6px; border:1px solid var(--line); border-radius:5px;}
+  .set-group input.wide{width:100%;}
+  .set-group input[type=text]{font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:5px;}
+  .set-group .hint{margin:4px 0 0;}
+  .set-sum{font-size:12.5px; color:var(--sub); margin-top:4px;}
+  .set-errors{color:#b4341f; font-size:12.5px; white-space:pre-wrap;}
+  .panel-foot{display:flex; justify-content:flex-end; gap:8px; padding:12px 18px; border-top:1px solid var(--line);}
+  .panel-foot button{font:inherit; font-size:13px; padding:6px 14px; cursor:pointer;
+                     border:1px solid var(--line); border-radius:6px; background:#fff;}
+  .panel-foot button.primary{background:var(--accent); color:#fff; border-color:var(--accent);}
+
+  /* ---- ルビ（直訳グロス）：機能語以外に振る。rtは控えめに ---- */
+  .title, .abst{ line-height:2.05; }            /* rt の上付き分の行間を確保 */
+  ruby{ ruby-align:center; }
+  ruby rt{
+    font-size:.6em; font-weight:500; color:var(--accent);
+    line-height:1.1; letter-spacing:0; user-select:none;
+  }
+  .card.del rt{ color:var(--grey-ink); }        /* del時はルビも沈める */
+
+  /* ---- words パネル（用語集の編集。settingsモーダルの語彙を流用） ---- */
+  .words-rows{ display:flex; flex-direction:column; gap:0; }
+  .words-add{
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+    padding:10px 12px; margin-bottom:12px;
+    background:var(--bg); border:1px solid var(--line); border-radius:8px;
+  }
+  .words-add .lbl{ font-size:12px; color:var(--accent); font-weight:700; width:100%; }
+  .wrow{
+    display:grid; grid-template-columns:minmax(0,1.1fr) minmax(0,1.4fr) auto auto;
+    gap:8px; align-items:center;
+    padding:7px 4px; border-bottom:1px solid var(--line);
+  }
+  .wrow:last-child{ border-bottom:none; }
+  .wrow .en{ font-size:13.5px; word-break:break-word; }
+  .wrow .en .src{ display:block; font-size:10.5px; color:var(--sub); margin-top:1px; }
+  .wrow .en.unreg .src{ color:var(--contra); }
+  .wrow input[type=text]{ font:inherit; font-size:13px; padding:5px 7px; border:1px solid var(--line); border-radius:5px; width:100%; min-width:0; }
+  .wrow select{ font:inherit; font-size:12.5px; padding:4px 4px; border:1px solid var(--line); border-radius:5px; }
+  .wrow .savew{
+    font:inherit; font-size:12px; padding:5px 10px; cursor:pointer;
+    border:1px solid var(--line); border-radius:5px; background:#fff; color:var(--accent); white-space:nowrap;
+  }
+  .wrow .savew:hover{ border-color:var(--accent); }
+  .wrow .savew.done{ background:var(--accent); color:#fff; border-color:var(--accent); }
+  .words-empty{ color:var(--sub); font-size:13px; padding:12px 4px; }
+  .words-note{ font-size:12px; color:var(--sub); margin:0 0 10px; }
+  @media (max-width:560px){
+    .wrow{ grid-template-columns:1fr 1fr; }
+    .wrow .en{ grid-column:1 / -1; }
+  }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <button id="home">home</button>
+    <button id="setting">setting</button>
+    <span class="grow"></span>
+    <span class="count">未読 <b id="unread">–</b></span>
+    <button id="apply" class="primary">反映</button>
+    <button id="reload">reload</button>
+  </div>
+
+  <div id="grid" class="grid"></div>
+  <div id="status" class="status-msg"></div>
+
+  <!-- settings モーダル -->
+  <div id="settings-overlay" class="overlay" style="display:none">
+    <div class="panel">
+      <div class="panel-head">
+        <strong>setting</strong>
+        <button id="set-close" class="x">×</button>
+      </div>
+      <div class="panel-body">
+        <p class="hint">1日の取得件数を枠ごとに設定。期間は「何ヶ月前」で指定します。保存すると次回の取得（fetchDaily）から反映されます。</p>
+
+        <div class="set-group">
+          <div class="set-group-title">枠ごとの件数（合計が1日の取得数）</div>
+          <label>評価 <input type="number" id="s-eval" min="0" step="1"></label>
+          <label>無作為 <input type="number" id="s-random" min="0" step="1"></label>
+          <label>横断 <input type="number" id="s-cross" min="0" step="1"></label>
+          <label>逆張り <input type="number" id="s-contra" min="0" step="1"></label>
+          <div class="set-sum">合計 <b id="s-sum">–</b> 件/日</div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">評価枠 期間窓（何ヶ月前）</div>
+          <label>開始（古い側） <input type="number" id="s-evalFrom" min="0" step="1"></label>
+          <label>終了（新しい側） <input type="number" id="s-evalUntil" min="0" step="1"></label>
+          <div class="hint">開始 &gt; 終了。例: 開始24・終了6 = 2年前〜半年前</div>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">無作為枠 / 逆張り枠 期間</div>
+          <label>無作為: 直近何ヶ月から <input type="number" id="s-randomWin" min="0" step="1"></label>
+          <label>逆張り: 何ヶ月以上前 <input type="number" id="s-contraOld" min="0" step="1"></label>
+        </div>
+
+        <div class="set-group">
+          <div class="set-group-title">横断キーワード（カンマ区切り）</div>
+          <input type="text" id="s-keywords" class="wide" placeholder="lateral, health, memory">
+        </div>
+
+        <div id="set-errors" class="set-errors"></div>
+      </div>
+      <div class="panel-foot">
+        <button id="set-cancel">キャンセル</button>
+        <button id="set-save" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- words モーダル（用語集の編集） -->
+  <div id="words-overlay" class="overlay" style="display:none">
+    <div class="panel">
+      <div class="panel-head">
+        <strong>words — 用語集を編集</strong>
+        <button id="words-close" class="x">×</button>
+      </div>
+      <div class="panel-body">
+        <p class="words-note">このカードで使われている語に、原本辞書(汎用)の訳を当てた一覧です。訳を直すと用語集(あなたの層)に保存され、原本より優先されます。空欄は未登録。固有名詞などルビ不要な語は status を ignore に。</p>
+        <div class="words-add">
+          <span class="lbl">用語を追加（複合語も可: 例「machine learning」）</span>
+          <input type="text" id="wadd-en" placeholder="英語（小文字）" style="flex:1 1 140px">
+          <input type="text" id="wadd-ja" placeholder="日本語の意味" style="flex:1 1 160px">
+          <select id="wadd-status">
+            <option value="confirmed">訳を出す</option>
+            <option value="ignore">ルビを出さない</option>
+          </select>
+          <button id="wadd-save" class="savew">追加</button>
+        </div>
+        <div id="words-rows" class="words-rows"></div>
+      </div>
+      <div class="panel-foot">
+        <button id="words-done" class="primary">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // ---- クライアント状態（検証済みロジック） ----
+  var marks = {};               // id -> 'del' | 'keep'
+  var loadedIds = {};           // 画面に出ている id の重複防止
+  var papersById = {};          // id -> {title, abst} （読み上げ用）
+  var busy = false;
+
+  function esc(s){ return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+  /* ======================================================================
+     辞書エンジン（直訳ルビ）
+     - ejdict: 原本(汎用・PD)。GitHub Pages から初回 fetch → IndexedDB キャッシュ。
+     - glossary: 追加用(あなたの層)。google.script.run で読み書き。原本より優先。
+     - 照合は句を最優先で当ててから単語（句・単語は同格にルビ）。
+     - 機能語(the/of/is…)はルビを出さない。
+     ====================================================================== */
+
+  // ▼ ここに ejdict-hand の TSV を置いた GitHub Pages の絶対URLを入れる（空ならルビは glossary のみ）
+  // var EJDICT_URL = "";
+  var EJDICT_URL = "https://molingit.github.io/ejdict/ejdict-hand-utf8.txt";
+
+  var ejdict   = new Map();   // "field" -> "野原, 田畑; 分野; (物理)場"
+  var glossary = new Map();   // "ablation" -> {ja, status}  / 句も可: "machine learning"
+  var phraseList = [];        // glossary のうち空白を含む句。長い順。
+
+  var irregular = new Map([
+    ["went","go"],["gone","go"],["went","go"],["analyses","analysis"],["data","datum"],
+    ["children","child"],["men","man"],["women","woman"],["feet","foot"],["mice","mouse"],
+    ["better","good"],["best","good"],["worse","bad"]
+  ]);
+
+  // 機能語：意味を担わない語はルビを出さない（視認性のため）
+  var FUNCTION_WORDS = new Set(("a an the this that these those some any no each every either neither " +
+    "i you he she it we they me him her us them my your his its our their mine yours hers ours theirs " +
+    "and or but nor so yet for as if then than because while although though unless whereas whether " +
+    "of in on at to from by with about into onto over under above below between among through during " +
+    "before after since until within without across against toward towards upon per via off out up down " +
+    "is am are was were be been being do does did done have has had having will would shall should " +
+    "can could may might must ought not also very more most such only just even much many few less least " +
+    "here there where when why how what which who whom whose all both same other another own " +
+    "we'll i'll it's that's there's don't doesn't isn't aren't won't can't").split(/\s+/));
+
+  // ---- IndexedDB（ejdict 本文の永続キャッシュ。失敗してもfetchで動く） ----
+  function idbOpen(){
+    return new Promise(function(res, rej){
+      try{
+        var r = indexedDB.open("paperTriageDict", 1);
+        r.onupgradeneeded = function(){ r.result.createObjectStore("kv"); };
+        r.onsuccess = function(){ res(r.result); };
+        r.onerror = function(){ rej(r.error); };
+      }catch(e){ rej(e); }
+    });
+  }
+  function idbGet(key){
+    return idbOpen().then(function(db){ return new Promise(function(res,rej){
+      var t = db.transaction("kv","readonly").objectStore("kv").get(key);
+      t.onsuccess=function(){ res(t.result); }; t.onerror=function(){ rej(t.error); };
+    });});
+  }
+  function idbSet(key,val){
+    return idbOpen().then(function(db){ return new Promise(function(res,rej){
+      var t = db.transaction("kv","readwrite").objectStore("kv").put(val,key);
+      t.onsuccess=function(){ res(true); }; t.onerror=function(){ rej(t.error); };
+    });});
+  }
+
+  function parseEjdict(text){
+    ejdict.clear();
+    var lines = text.split("\n");
+    for(var i=0;i<lines.length;i++){
+      var t = lines[i].indexOf("\t");
+      if(t<0) continue;
+      ejdict.set(lines[i].slice(0,t).trim().toLowerCase(), lines[i].slice(t+1).trim());
+    }
+  }
+
+  async function loadEjdict(){
+    if(!EJDICT_URL){ return; }                 // URL未設定ならスキップ（ルビはglossaryのみ）
+    // 1) キャッシュ優先（同じURLのものだけ採用）
+    try{
+      var cached = await idbGet("ejdict");
+      if(cached && cached.url === EJDICT_URL && cached.text){
+        parseEjdict(cached.text); return;
+      }
+    }catch(e){ /* IDB不可でも続行 */ }
+    // 2) 取得してキャッシュ
+    try{
+      var text = await fetch(EJDICT_URL).then(function(r){ if(!r.ok) throw new Error(r.status); return r.text(); });
+      parseEjdict(text);
+      try{ await idbSet("ejdict", {url:EJDICT_URL, text:text}); }catch(e){}
+    }catch(e){
+      setStatus("原本辞書の読み込みに失敗（URL未設定/通信エラー）。ルビは用語集分のみ表示します。");
+      setTimeout(function(){ setStatus(""); }, 4000);
+    }
+  }
+
+  function refreshGlossary(){
+    return new Promise(function(res){
+      google.script.run.withSuccessHandler(function(data){
+        glossary.clear();
+        (data||[]).forEach(function(e){ glossary.set(String(e.en).toLowerCase(), {ja:e.ja||"", status:e.status||"confirmed"}); });
+        rebuildPhraseList();
+        res();
+      }).withFailureHandler(function(){ res(); }).getGlossary();
+    });
+  }
+
+  function loadDicts(){
+    // ejdict と glossary を並行ロード（どちらが失敗しても全体は止めない）
+    return Promise.all([ loadEjdict(), refreshGlossary() ]);
+  }
+
+  function rebuildPhraseList(){
+    phraseList = [];
+    glossary.forEach(function(v,k){
+      if(k.indexOf(" ")>=0) phraseList.push({key:k, ja:v.ja, status:v.status, len:k.length});
+    });
+    phraseList.sort(function(a,b){ return b.len - a.len; });  // 長い句を先に当てる
+  }
+
+  // ---- 見出し語化（素朴版・候補を作って最初にヒットしたものを採用） ----
+  function lemmaCandidates(w){
+    var c = [w];
+    if(irregular.has(w)) c.push(irregular.get(w));
+    if(w.endsWith("ies") && w.length>4) c.push(w.slice(0,-3)+"y");
+    if(w.endsWith("es")  && w.length>3){ c.push(w.slice(0,-2)); c.push(w.slice(0,-1)); }
+    if(w.endsWith("s")   && w.length>3) c.push(w.slice(0,-1));
+    if(w.endsWith("ied")) c.push(w.slice(0,-3)+"y");
+    if(w.endsWith("ed")  && w.length>3){ c.push(w.slice(0,-2)); c.push(w.slice(0,-1)); }
+    if(w.endsWith("ing") && w.length>4){
+      var s=w.slice(0,-3); c.push(s); c.push(s+"e");
+      if(/(.)\1$/.test(s)) c.push(s.slice(0,-1));
+    }
+    return Array.from(new Set(c));
+  }
+
+  // 単語の引き： glossary 優先 → ejdict。ignore は null（ルビ出さない）。
+  function lookup(rawWord){
+    var w = rawWord.toLowerCase();
+    var cands = lemmaCandidates(w), i, g;
+    for(i=0;i<cands.length;i++){
+      g = glossary.get(cands[i]);
+      if(g) return g.status==="ignore" ? null : { gloss:g.ja, source:"glossary" };
+    }
+    for(i=0;i<cands.length;i++){
+      if(ejdict.has(cands[i])) return { gloss:ejdict.get(cands[i]), source:"ejdict" };
+    }
+    return null;
+  }
+
+  // 位置 i から始まる句を当てる（長い順・語境界チェック）
+  function matchPhraseAt(text, i){
+    if(!phraseList.length) return null;
+    var rest = text.slice(i), lower = rest.toLowerCase();
+    for(var j=0;j<phraseList.length;j++){
+      var key = phraseList[j].key;
+      if(lower.indexOf(key)===0){
+        var after = rest.charAt(key.length);
+        if(after==="" || !/[A-Za-z]/.test(after))
+          return { len:key.length, ja:phraseList[j].ja, status:phraseList[j].status };
+      }
+    }
+    return null;
+  }
+
+  function rubyWrap(surface, ja){
+    if(!ja) return esc(surface);
+    var rt = ja.split(/[;；]/)[0].slice(0,12);     // 先頭語義のみ・字数制限で行崩れ防止
+    return "<ruby>"+esc(surface)+"<rt>"+esc(rt)+"</rt></ruby>";
+  }
+
+  function renderWord(word){
+    if(/^[A-Z]{2,}$/.test(word)) return esc(word);            // 全大文字の略語はスキップ
+    if(FUNCTION_WORDS.has(word.toLowerCase())) return esc(word); // 機能語はルビなし
+    var hit = lookup(word);
+    return hit ? rubyWrap(word, hit.gloss) : esc(word);
+  }
+
+  // 本文にルビを振る（句先取り→単語→非英字）。読みのみ・書き込みなし。
+  function renderRuby(text){
+    text = String(text==null?"":text);
+    var out="", i=0, n=text.length;
+    while(i<n){
+      var ch = text[i];
+      if(/[A-Za-z]/.test(ch)){
+        var ph = matchPhraseAt(text, i);
+        if(ph){
+          var surf = text.slice(i, i+ph.len);
+          out += (ph.status==="ignore") ? esc(surf) : rubyWrap(surf, ph.ja);
+          i += ph.len; continue;
+        }
+        var m = /^[A-Za-z][A-Za-z'\-]*/.exec(text.slice(i));
+        out += renderWord(m[0]); i += m[0].length;
+      } else {
+        var nm = /^[^A-Za-z]+/.exec(text.slice(i));
+        out += esc(nm[0]); i += nm[0].length;
+      }
+    }
+    return out;
+  }
+
+  // words パネル用：このカードの語を重複排除で導出（未登録は空欄で含む）。書き込みなし。
+  function collectWords(text){
+    var words = (String(text||"").match(/[A-Za-z][A-Za-z'\-]*/g)||[])
+      .filter(function(w){ return !/^[A-Z]{2,}$/.test(w); })
+      .filter(function(w){ return !FUNCTION_WORDS.has(w.toLowerCase()); });
+    var seen = new Map();
+    for(var k=0;k<words.length;k++){
+      var key = words[k].toLowerCase();
+      if(seen.has(key)) continue;
+      var g = glossary.get(key);          // この見出しそのものの登録
+      var e = lookup(words[k]);           // 表示用の現状の訳（glossary→ejdict）
+      seen.set(key, {
+        surface: key,
+        gloss:  g ? g.ja : (e ? e.gloss : ""),
+        source: g ? "用語集" : (e ? "汎用辞書" : "未登録"),
+        status: g ? g.status : ""
+      });
+    }
+    return Array.from(seen.values());
+  }
+
+  // 用語集を1語 upsert（パネルで編集・追加した時だけ）→ ローカル即時反映＋カード再描画
+  function saveGloss(en, ja, status, btn){
+    en = String(en||"").toLowerCase().trim();
+    if(!en){ return; }
+    if(btn){ btn.disabled=true; btn.textContent="…"; }
+    google.script.run.withSuccessHandler(function(res){
+      if(res && res.ok){
+        glossary.set(res.en, {ja:res.ja, status:res.status});
+        rebuildPhraseList();
+        if(btn){ btn.textContent="✓"; btn.classList.add("done"); }
+        if(currentWordsCardId) rerenderCard(currentWordsCardId);
+      } else if(btn){ btn.disabled=false; btn.textContent="保存"; }
+    }).withFailureHandler(function(){
+      if(btn){ btn.disabled=false; btn.textContent="再試行"; }
+    }).saveGlossaryEntry({ en:en, ja:ja, status:status });
+  }
+
+  // カードのタイトル/abst をルビ付きで描き直す（保存直後の反映用）
+  function rerenderCard(id){
+    var p = papersById[id]; if(!p) return;
+    var card = document.querySelector('.card[data-id="'+cssEsc(id)+'"]'); if(!card) return;
+    var t = card.querySelector(".title"); if(t) t.innerHTML = renderRuby(p.title || "（タイトルなし）");
+    var a = card.querySelector(".abst");
+    if(a){
+      var has = p.abst && p.abst.trim().length>0;
+      a.innerHTML = has ? renderRuby(p.abst) : '<span class="empty">abstract なし（タイトルで判断）</span>';
+    }
+  }
+
+  function slotLabel(s){
+    return {eval:'評価', random:'無作為', cross:'横断', contra:'逆張り'}[s] || s || '—';
+  }
+
+  function cardHtml(p){
+    var hasAbst = p.abst && p.abst.trim().length>0;
+    var abstInner = hasAbst ? renderRuby(p.abst) : '<span class="empty">abstract なし（タイトルで判断）</span>';
+    var linkHtml = p.url ? '<a class="link" href="'+esc(p.url)+'" target="_blank" rel="noopener">'+esc(p.url)+'</a>' : '';
+    var slotClass = ({eval:'slot-eval',random:'slot-random',cross:'slot-cross',contra:'slot-contra'})[p.slot] || '';
+    return ''+
+    '<div class="card '+slotClass+'" data-id="'+esc(p.id)+'">'+
+      '<div class="actions">'+
+        '<button class="keepbtn" data-act="keep">keep</button>'+
+        '<button class="delbtn" data-act="del">del</button>'+
+        '<button class="wordsbtn" data-words>words</button>'+
+        '<button class="playbtn" data-play>▶</button>'+
+      '</div>'+
+      '<div class="title">'+renderRuby(p.title||'（タイトルなし）')+'</div>'+
+      '<div class="meta"><span class="slot '+slotClass+'">'+slotLabel(p.slot)+'</span></div>'+
+      '<div class="abst clamp">'+abstInner+'</div>'+
+      (hasAbst || p.url
+        ? '<div class="extra" style="display:none">'+linkHtml+'</div>' : '')+
+      ((hasAbst) ? '<button class="toggle" data-toggle>▼ もっと読む</button>' :
+        (p.url ? '<button class="toggle" data-toggle>▼ リンク</button>' : ''))+
+    '</div>';
+  }
+
+  function render(papers, append){
+    var grid = document.getElementById('grid');
+    if(!append){ grid.innerHTML=''; loadedIds={}; marks={}; }
+    var html='';
+    papers.forEach(function(p){
+      if(loadedIds[p.id]) return;     // 既に画面にあるものは足さない
+      loadedIds[p.id]=true;
+      papersById[p.id] = {title:p.title||'', abst:p.abst||''};
+      html += cardHtml(p);
+    });
+    grid.insertAdjacentHTML('beforeend', html);
+    if(grid.children.length===0){
+      grid.innerHTML='<div class="empty-state">未読の論文はありません。取得GAS（fetchDaily）を実行すると溜まります。</div>';
+    }
+  }
+
+  // ---- イベント委譲 ----
+  document.getElementById('grid').addEventListener('click', function(e){
+    var card = e.target.closest('.card'); if(!card) return;
+    var id = card.getAttribute('data-id');
+
+    // 展開トグル
+    if(e.target.hasAttribute('data-toggle')){
+      var abst = card.querySelector('.abst');
+      var extra = card.querySelector('.extra');
+      var open = abst.classList.toggle('clamp')===false;
+      if(extra) extra.style.display = open ? 'block' : 'none';
+      e.target.textContent = open ? '▲ 閉じる' : (abst ? '▼ もっと読む' : '▼ リンク');
+      return;
+    }
+    // keep / del（右上ボタン）
+    if(e.target.hasAttribute('data-act')){
+      var act = e.target.getAttribute('data-act');
+      if(marks[id]===act){ delete marks[id]; card.classList.remove('del','keep'); }   // 取り消し
+      else { marks[id]=act; card.classList.remove('del','keep'); card.classList.add(act); } // 上書き
+      return;
+    }
+    // words（このカードの語＋訳の一覧。編集すると用語集に保存）
+    if(e.target.hasAttribute('data-words')){
+      openWords(id);
+      return;
+    }
+    // 再生 / 停止（Web Speech）
+    if(e.target.hasAttribute('data-play')){
+      togglePlay(id, e.target);
+      return;
+    }
+  });
+
+  // ---- 反映：marksをSheetへ。確定カードだけ画面から消す。未印は残る ----
+  function apply(after){
+    if(busy) return;
+    var ids = Object.keys(marks);
+    if(ids.length===0){ if(after) after(); return; }
+    busy=true; setStatus('反映中…');
+    var updates = ids.map(function(id){ return {id:id, status: marks[id]==='del'?'dropped':'keep'}; });
+    google.script.run
+      .withSuccessHandler(function(){
+        ids.forEach(function(id){
+          var c = document.querySelector('.card[data-id="'+cssEsc(id)+'"]');
+          if(c){ c.remove(); delete loadedIds[id]; }
+        });
+        marks={};
+        busy=false; setStatus(''); refreshCount();
+        if(after) after();
+      })
+      .withFailureHandler(function(err){ busy=false; setStatus('反映に失敗: '+err.message); })
+      .applyUpdates(updates);
+  }
+
+  // ---- reload：裏で反映してから次の30件を追加 ----
+  function reload(){
+    apply(function(){
+      if(busy) return; busy=true; setStatus('読み込み中…');
+      google.script.run
+        .withSuccessHandler(function(papers){
+          render(papers, true); busy=false; setStatus(''); refreshCount();
+        })
+        .withFailureHandler(function(err){ busy=false; setStatus('読み込みに失敗: '+err.message); })
+        .getPage();
+    });
+  }
+
+  function refreshCount(){
+    google.script.run.withSuccessHandler(function(n){
+      document.getElementById('unread').textContent = n;
+    }).getUnreadCount();
+  }
+
+  function setStatus(s){ document.getElementById('status').textContent = s; }
+  function cssEsc(s){ return String(s).replace(/["\\]/g,'\\$&'); }
+
+  // ---- 読み上げ（Web Speech API） ----
+  var playingBtn = null;
+  function stopSpeech(){
+    if(window.speechSynthesis) window.speechSynthesis.cancel();
+    if(playingBtn){ playingBtn.classList.remove('playing'); playingBtn.textContent='▶'; playingBtn=null; }
+  }
+  function togglePlay(id, btn){
+    if(!('speechSynthesis' in window)){
+      setStatus('このブラウザは読み上げに対応していません。');
+      setTimeout(function(){setStatus('');},2500); return;
+    }
+    // 同じカードの再生中ボタンを押したら停止
+    if(playingBtn===btn){ stopSpeech(); return; }
+    stopSpeech(); // 別カードが再生中なら止めてから
+
+    var p = papersById[id] || {title:'', abst:''};
+    var title = (p.title||'').trim();
+    var abst  = (p.abst||'').trim();
+    var text = abst ? (title + '. ' + abst) : title; // abst無しはタイトルのみ
+    if(!text){ setStatus('読み上げる文がありません。'); setTimeout(function(){setStatus('');},2000); return; }
+
+    var u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US';                 // 英語のabstを英語音声で（声・速度は既定）
+    u.onend = function(){ stopSpeech(); };
+    u.onerror = function(){ stopSpeech(); };
+    btn.classList.add('playing'); btn.textContent='■';
+    playingBtn = btn;
+    window.speechSynthesis.speak(u);
+  }
+  // ページ離脱時に読み上げを止める
+  window.addEventListener('beforeunload', stopSpeech);
+
+  // ---- ツールバー ----
+  document.getElementById('apply').addEventListener('click', function(){ apply(null); });
+  document.getElementById('reload').addEventListener('click', reload);
+  document.getElementById('setting').addEventListener('click', openSettings);
+  // home は molingit.com へ
+  document.getElementById('home').addEventListener('click', function(){
+    window.open('https://molingit.com', '_blank', 'noopener');
+  });
+
+  // ---- settings パネル ----
+  var SET_FIELDS = {
+    eval:'s-eval', random:'s-random', cross:'s-cross', contra:'s-contra',
+    evalFromMonths:'s-evalFrom', evalUntilMonths:'s-evalUntil',
+    randomWindowMonths:'s-randomWin', contraOlderThanMonths:'s-contraOld',
+    crossKeywords:'s-keywords'
+  };
+  function setEl(id){ return document.getElementById(id); }
+  function updateSum(){
+    var sum = ['s-eval','s-random','s-cross','s-contra'].reduce(function(a,id){
+      var n=Number(setEl(id).value); return a+(isNaN(n)?0:n);
+    },0);
+    setEl('s-sum').textContent = sum;
+  }
+  function openSettings(){
+    setEl('set-errors').textContent='';
+    google.script.run.withSuccessHandler(function(s){
+      for(var key in SET_FIELDS){ setEl(SET_FIELDS[key]).value = s[key]; }
+      updateSum();
+      setEl('settings-overlay').style.display='flex';
+    }).withFailureHandler(function(err){
+      setStatus('設定の読み込みに失敗: '+err.message);
+    }).getSettingsForUi();
+  }
+  function closeSettings(){ setEl('settings-overlay').style.display='none'; }
+  function saveSettingsFromUi(){
+    var obj={};
+    for(var key in SET_FIELDS){ obj[key]=setEl(SET_FIELDS[key]).value; }
+    setEl('set-errors').textContent='保存中…';
+    google.script.run.withSuccessHandler(function(res){
+      if(res.ok){
+        setEl('set-errors').textContent='';
+        closeSettings();
+        setStatus('設定を保存しました。次回の取得から反映されます。');
+        setTimeout(function(){setStatus('');},3000);
+      } else {
+        setEl('set-errors').textContent = res.errs.join('\n');
+      }
+    }).withFailureHandler(function(err){
+      setEl('set-errors').textContent = '保存に失敗: '+err.message;
+    }).saveSettings(obj);
+  }
+  ['s-eval','s-random','s-cross','s-contra'].forEach(function(id){
+    document.getElementById(id).addEventListener('input', updateSum);
+  });
+  setEl('set-close').addEventListener('click', closeSettings);
+  setEl('set-cancel').addEventListener('click', closeSettings);
+  setEl('set-save').addEventListener('click', saveSettingsFromUi);
+  setEl('settings-overlay').addEventListener('click', function(e){
+    if(e.target===this) closeSettings();   // 背景クリックで閉じる
+  });
+
+  // ---- words パネル（用語集の編集） ----
+  var currentWordsCardId = null;
+
+  function openWords(id){
+    currentWordsCardId = id;
+    var p = papersById[id] || {title:'', abst:''};
+    var text = (p.title||'') + ' ' + (p.abst||'');
+    var rows = collectWords(text);
+    var box = document.getElementById('words-rows');
+
+    if(rows.length===0){
+      box.innerHTML = '<div class="words-empty">対象となる英単語がありません。</div>';
+    } else {
+      box.innerHTML = rows.map(function(w){
+        var unreg = (w.source==='未登録');
+        var statusSel =
+          '<select class="wstatus">'+
+            '<option value="confirmed"'+(w.status!=='ignore'?' selected':'')+'>訳を出す</option>'+
+            '<option value="ignore"'+(w.status==='ignore'?' selected':'')+'>ルビなし</option>'+
+          '</select>';
+        return ''+
+          '<div class="wrow" data-en="'+esc(w.surface)+'">'+
+            '<div class="en'+(unreg?' unreg':'')+'">'+esc(w.surface)+
+              '<span class="src">'+esc(w.source)+'</span></div>'+
+            '<input type="text" class="wja" value="'+esc(w.gloss)+'" placeholder="日本語の意味">'+
+            statusSel+
+            '<button class="savew">保存</button>'+
+          '</div>';
+      }).join('');
+    }
+    document.getElementById('words-overlay').style.display='flex';
+  }
+  function closeWords(){
+    document.getElementById('words-overlay').style.display='none';
+    currentWordsCardId = null;
+  }
+
+  // 行内の保存（イベント委譲）
+  document.getElementById('words-rows').addEventListener('click', function(e){
+    if(!e.target.classList.contains('savew')) return;
+    var row = e.target.closest('.wrow'); if(!row) return;
+    var en = row.getAttribute('data-en');
+    var ja = row.querySelector('.wja').value;
+    var status = row.querySelector('.wstatus').value;
+    saveGloss(en, ja, status, e.target);
+  });
+  // 編集したら「✓」表示を戻す
+  document.getElementById('words-rows').addEventListener('input', function(e){
+    var row = e.target.closest('.wrow'); if(!row) return;
+    var b = row.querySelector('.savew');
+    if(b){ b.classList.remove('done'); b.textContent='保存'; b.disabled=false; }
+  });
+  // 新規追加（複合語可）
+  document.getElementById('wadd-save').addEventListener('click', function(){
+    var en = document.getElementById('wadd-en').value;
+    var ja = document.getElementById('wadd-ja').value;
+    var status = document.getElementById('wadd-status').value;
+    if(!en.trim()) return;
+    var btn = this;
+    saveGloss(en, ja, status, btn);
+    // 追加後に一覧を作り直して反映（このカードに該当語があれば訳が出る）
+    setTimeout(function(){
+      document.getElementById('wadd-en').value='';
+      document.getElementById('wadd-ja').value='';
+      btn.textContent='追加'; btn.classList.remove('done'); btn.disabled=false;
+      if(currentWordsCardId) openWords(currentWordsCardId);
+    }, 350);
+  });
+  document.getElementById('words-close').addEventListener('click', closeWords);
+  document.getElementById('words-done').addEventListener('click', closeWords);
+  document.getElementById('words-overlay').addEventListener('click', function(e){
+    if(e.target===this) closeWords();
+  });
+
+  // ---- 初期ロード ----
+  (function init(){
+    setStatus('辞書を読み込み中…（初回のみ原本辞書をDLします）');
+    loadDicts().then(function(){
+      setStatus('読み込み中…');
+      google.script.run
+        .withSuccessHandler(function(papers){ render(papers, false); setStatus(''); refreshCount(); })
+        .withFailureHandler(function(err){ setStatus('読み込みに失敗: '+err.message); })
+        .getPage();
+    });
+  })();
+</script>
+</body>
+</html>

@@ -35,6 +35,7 @@
   .bar button:hover{border-color:var(--accent); color:var(--accent);}
   .bar button.primary{background:var(--accent); color:#fff; border-color:var(--accent);}
   .bar button.primary:hover{filter:brightness(1.08); color:#fff;}
+  #ruby-toggle.off{ color:var(--sub); }
   .count{font-size:13px; color:var(--sub);}
 
   .intro{
@@ -75,6 +76,10 @@
   /* ルビ */
   ruby{ ruby-align:center; }
   ruby rt{ font-size:.6em; font-weight:500; color:var(--accent); line-height:1.1; user-select:none; }
+  /* ルビ OFF 時：rt を隠し、行間も素の英文向けに戻す（描画は維持＝切替が軽い） */
+  body.ruby-off ruby rt{ display:none; }
+  body.ruby-off .title{ line-height:1.4; }
+  body.ruby-off .abst{ line-height:1.6; }
 
   .actions{position:absolute; top:8px; right:8px; display:flex; gap:5px;}
   .actions button{
@@ -101,6 +106,7 @@
     <span class="title-app">Paper Daily</span>
     <button id="home">molingit</button>
     <span class="grow"></span>
+    <button id="ruby-toggle">ルビ ON</button>
     <span class="count">残り <b id="remain">–</b></span>
   </div>
 
@@ -363,10 +369,25 @@
   document.getElementById('home').addEventListener('click', function(){ window.open('https://molingit.com','_blank','noopener'); });
   document.getElementById('more').addEventListener('click', appendBatch);
 
+  /* ===== ルビ ON/OFF トグル（localStorageに保存・デフォルトON。方式b＝rtをCSSで隠す） ===== */
+  function rubyIsOff(){ try{ return localStorage.getItem('ptd_ruby')==='off'; }catch(e){ return false; } }
+  function applyRubyState(){
+    var off = rubyIsOff();
+    document.body.classList.toggle('ruby-off', off);
+    var b = document.getElementById('ruby-toggle');
+    if(b){ b.textContent = off ? 'ルビ OFF' : 'ルビ ON'; b.classList.toggle('off', off); }
+  }
+  document.getElementById('ruby-toggle').addEventListener('click', function(){
+    var off = rubyIsOff();
+    try{ localStorage.setItem('ptd_ruby', off ? 'on' : 'off'); }catch(e){}
+    applyRubyState();
+  });
+
   function setStatus(s){ document.getElementById('status').textContent=s; }
 
   /* ===== 初期化 ===== */
   (function init(){
+    applyRubyState();   // ルビON/OFFの初期状態を反映
     setStatus('読み込み中…');
     Promise.all([
       loadEjdict(),
